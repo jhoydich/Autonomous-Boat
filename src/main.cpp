@@ -17,7 +17,7 @@
 #include "navFunctions.h"
 #include "helperFunctions.h"
 
-// TODO: add motor driver
+
 
 // creating a semaphone
 static SemaphoreHandle_t batton;
@@ -29,6 +29,17 @@ static uint8_t readingQueueLen = 15;
 static uint8_t waypointQueueLen = 50;
 
 // --- Motor globals ---
+
+// DC Motor
+int motor1Pin1 = 12; 
+int motor1Pin2 = 13; 
+int enable1Pin = 14; 
+
+// Setting PWM properties
+const int freq = 30000;
+const int pwmChannel = 4;
+const int resolution = 8;
+int dutyCycle = 250;
 
 // servo object
 Servo myservo;
@@ -52,8 +63,7 @@ static const uint32_t GPSBaud = 9600;
 SoftwareSerial ss(RXPin, TXPin);
 
 // global vars for gps that are constantly updated
-double lat, lng, hdop;
-bool validity = false;
+double lat, lng, hdop, prevLat, prevLng;
 uint8_t day, month;
 uint16_t yr;
 uint8_t hr, mins, sec;
@@ -74,13 +84,11 @@ void readGPS(void *parameter) {
 
         // getting gps
         if (gps.location.isValid()) { 
-          validity = true;
+          
           lat = gps.location.lat();
           lng = gps.location.lng(); 
           hdop = gps.hdop.hdop();
-        } else {
-          validity = false;
-        }
+        } 
 
         // getting date
         if (gps.date.isValid()) {
@@ -110,7 +118,6 @@ void handleGPS(void *parameter) {
 
   // rudder angle vars
   double prevBearing = 1000; // making previous bearing a value it cannot be for initial set up
-  bool curValidity;
   uint8_t curDay, curMonth;
   uint16_t curYr;
   uint8_t curHr, curMin, curSec;
@@ -128,7 +135,6 @@ void handleGPS(void *parameter) {
     
     // get latest values
     xSemaphoreTake(batton, portMAX_DELAY);
-    curValidity = validity;
     r.lat = lat;
     r.lng = lng;
     r.hdop = hdop;
@@ -140,44 +146,44 @@ void handleGPS(void *parameter) {
     curSec = sec;
     xSemaphoreGive(batton);
 
-    if (curValidity == true) {
+    
       
-      // check if we are at the waypoint, if so, update waypoint
-      if (w.wayLat - uncertainty < r.lat && r.lat < w.wayLat + uncertainty && w.wayLng - uncertainty < r.lng && r.lng < w.wayLng + uncertainty ) {
-        if (xQueueReceive(waypointQueue, (void *)&w, 0) != pdTRUE) { // kill motors if nothing in queue, we are at the final location
-          // kill motor f'n
-        }
-      }  
+    // check if we are at the waypoint, if so, update waypoint
+    if (w.wayLat - uncertainty < r.lat && r.lat < w.wayLat + uncertainty && w.wayLng - uncertainty < r.lng && r.lng < w.wayLng + uncertainty ) {
+      if (xQueueReceive(waypointQueue, (void *)&w, 0) != pdTRUE) { // kill motors if nothing in queue, we are at the final location
+        digitalWrite(motor1Pin1, LOW);
+        digitalWrite(motor1Pin2, LOW);
 
-      // updating reading struct
-      r.date = formatDate(curMonth, curDay, curYr);   
-      r.readingTime = formatTime(curHr, curMin, curSec);        
-      r.distance = gps.distanceBetween(r.lat, r.lng, w.wayLat, w.wayLng);
-      r.bearing = gps.courseTo(r.lat, r.lng, w.wayLat, w.wayLng);
-      
-
-      // if first gps co-ord, update prevBearing
-      if (prevBearing == 1000) {
-        prevBearing = r.bearing;
-      } else {
-
-        // navigation control function
-        r.rudderAngle = diffControl(r.bearing, prevBearing);
-
-        prevBearing = r.bearing;
-
-        // write to servo
-        myservo.write(r.rudderAngle);
-
-        // sending data into queue
-        if (xQueueSend(readingQueue, (void *)&r, 10) != pdTRUE) {
-            Serial.println("ERROR: Could not put item in reading queue.");
-          }
+        // TODO: think about deleting the tasks at this point
       }
+    }  
 
-    } else {
-      Serial.println("No readings yet");
-    }
+    // updating reading struct
+    r.date = formatDate(curMonth, curDay, curYr);   
+    r.readingTime = formatTime(curHr, curMin, curSec);        
+    r.distance = gps.distanceBetween(r.lat, r.lng, w.wayLat, w.wayLng);
+    r.bearing = gps.courseTo(r.lat, r.lng, w.wayLat, w.wayLng);
+    
+
+    // find bearing between current position and last known position
+    prevBearing = gps.courseTo(prevLat, prevLng, r.lat, r.lng);
+
+    // navigation control function
+    r.rudderAngle = diffControl(r.bearing, prevBearing);
+
+    prevLat = r.lat;
+    prevLng = r.lng;
+
+    // write to servo
+    myservo.write(r.rudderAngle);
+
+    // sending data into queue
+    if (xQueueSend(readingQueue, (void *)&r, 10) != pdTRUE) {
+        Serial.println("ERROR: Could not put item in reading queue.");
+      }
+    
+
+   
   
     vTaskDelay(2000 / portTICK_PERIOD_MS);
   }
@@ -204,6 +210,8 @@ void logReadings(void *parameter) {
         Serial.print(item.distance);
         Serial.print(" HDOP: ");
         Serial.println(item.hdop);
+        Serial.print("Rudder Angle: ");
+        Serial.println(item.rudderAngle);
         Serial.println("-----------------");
         Serial.println();
     }
@@ -240,22 +248,54 @@ void setup() {
   
   file.close();
 
-  // allocating timers (does it need all of these?)
-  ESP32PWM::allocateTimer(0);
-	ESP32PWM::allocateTimer(1);
-	ESP32PWM::allocateTimer(2);
-	ESP32PWM::allocateTimer(3);
+  // sets the pins as outputs:
+  pinMode(motor1Pin1, OUTPUT);
+  pinMode(motor1Pin2, OUTPUT);
+  pinMode(enable1Pin, OUTPUT);
+  
+  // configure LED PWM functionalitites
+  ledcSetup(pwmChannel, freq, resolution);
+  
+  // attach the channel to the GPIO to be controlled
+  ledcAttachPin(enable1Pin, pwmChannel);
+  
+  
 	myservo.setPeriodHertz(50);    // standard 50 hz servo
 	myservo.attach(servoPin, 500, 2400);
 
   // placing rudder in the middle
   myservo.write(90);
 
+  
+  
+
+  while (prevLat == 0.00 && prevLng == 0.00) {
+      while (ss.available() > 0) {
+        // converting NMEA data
+        if (gps.encode(ss.read())) { 
+
+          // getting gps
+          if (gps.location.isValid()) { 
+            prevLat = gps.location.lat();
+            prevLng = gps.location.lng();
+          } 
+        }
+      }   
+    }
+
+  
+  // we have lat and lng so we can start the motor
+  digitalWrite(motor1Pin1, HIGH);
+  digitalWrite(motor1Pin2, LOW);
+  ledcWrite(pwmChannel, dutyCycle);
+  
   // creating tasks for cores to run
   xTaskCreatePinnedToCore(&readGPS, "read GPS", 5000, NULL, 10, NULL, 1);
   xTaskCreatePinnedToCore(&handleGPS, "handle GPS data", 10000, NULL, 7, NULL, 0);
   xTaskCreatePinnedToCore(&logReadings, "log data", 5000, NULL, 5, NULL, 0);
 
+  
+  
 }
 
 // void loop is technically a task, so long delay gives other f'ns more "time" to run
