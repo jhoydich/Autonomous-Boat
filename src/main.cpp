@@ -17,7 +17,7 @@
 #include "navFunctions.h"
 #include "helperFunctions.h"
 
-// TODO: add motor driver
+
 
 // creating a semaphone
 static SemaphoreHandle_t batton;
@@ -29,6 +29,17 @@ static uint8_t readingQueueLen = 15;
 static uint8_t waypointQueueLen = 50;
 
 // --- Motor globals ---
+
+// DC Motor
+int motor1Pin1 = 12; 
+int motor1Pin2 = 13; 
+int enable1Pin = 14; 
+
+// Setting PWM properties
+const int freq = 30000;
+const int pwmChannel = 4;
+const int resolution = 8;
+int dutyCycle = 250;
 
 // servo object
 Servo myservo;
@@ -145,7 +156,7 @@ void handleGPS(void *parameter) {
       // check if we are at the waypoint, if so, update waypoint
       if (w.wayLat - uncertainty < r.lat && r.lat < w.wayLat + uncertainty && w.wayLng - uncertainty < r.lng && r.lng < w.wayLng + uncertainty ) {
         if (xQueueReceive(waypointQueue, (void *)&w, 0) != pdTRUE) { // kill motors if nothing in queue, we are at the final location
-          // kill motor f'n
+          //TODO: kill motor f'n
         }
       }  
 
@@ -240,6 +251,17 @@ void setup() {
   
   file.close();
 
+  // sets the pins as outputs:
+  pinMode(motor1Pin1, OUTPUT);
+  pinMode(motor1Pin2, OUTPUT);
+  pinMode(enable1Pin, OUTPUT);
+  
+  // configure LED PWM functionalitites
+  ledcSetup(pwmChannel, freq, resolution);
+  
+  // attach the channel to the GPIO to be controlled
+  ledcAttachPin(enable1Pin, pwmChannel);
+  
   // allocating timers (does it need all of these?)
   ESP32PWM::allocateTimer(0);
 	ESP32PWM::allocateTimer(1);
@@ -250,12 +272,17 @@ void setup() {
 
   // placing rudder in the middle
   myservo.write(90);
-
+  
   // creating tasks for cores to run
   xTaskCreatePinnedToCore(&readGPS, "read GPS", 5000, NULL, 10, NULL, 1);
   xTaskCreatePinnedToCore(&handleGPS, "handle GPS data", 10000, NULL, 7, NULL, 0);
   xTaskCreatePinnedToCore(&logReadings, "log data", 5000, NULL, 5, NULL, 0);
 
+  //TODO: Start motor function incorporating gps
+  digitalWrite(motor1Pin1, HIGH);
+  digitalWrite(motor1Pin2, LOW);
+  ledcWrite(pwmChannel, dutyCycle);
+  
 }
 
 // void loop is technically a task, so long delay gives other f'ns more "time" to run
