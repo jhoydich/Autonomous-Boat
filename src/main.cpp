@@ -169,13 +169,16 @@ void handleGPS(void *parameter) {
     prevBearing = gps.courseTo(prevLat, prevLng, r.lat, r.lng);
 
     // navigation control function
-    r.rudderAngle = diffControl(r.bearing, prevBearing);
+    r.rudderAngle = pidControl(r.bearing, prevBearing);
 
     prevLat = r.lat;
     prevLng = r.lng;
 
     // write to servo
     myservo.write(r.rudderAngle);
+    Serial.print("Rudder Angle: ");
+    Serial.println(r.rudderAngle);
+    Serial.println();
 
     // sending data into queue
     if (xQueueSend(readingQueue, (void *)&r, 10) != pdTRUE) {
